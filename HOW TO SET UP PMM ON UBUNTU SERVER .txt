@@ -1,0 +1,167 @@
+HOW TO SET UP PMM ON UBUNTU SERVER USING DOCKER
+
+Before you begin:
+Install Docker 1.12.6 or higher.
+For PMM 2.38.0 or greater, ensure your CPU (and any virtualization layer you may be using) supports x86-64-v2
+
+INSTALLING DOCKER:
+	Update your existing list of packages:
+	sudo apt-get update
+
+	Install prerequisite packages:
+	sudo apt-get install \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        software-properties-common
+
+
+	Add Docker’s official GPG key:
+	curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+
+
+	Add the Docker repository to APT sources:
+	sudo add-apt-repository \
+        "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+        $(lsb_release -cs) \
+        stable"
+
+	Update your package database with the Docker packages from the newly added repo:
+	sudo apt update
+        
+        Install Docker:
+	sudo apt-get install docker-ce
+
+        Verify that Docker is installed correctly by running the hello-world image:
+	sudo docker run hello-world
+
+TO INSTALL PMM SERVER:
+
+	Pull the PMM Server Docker image:
+	docker pull percona/pmm-server:latest
+
+	Create a directory on the host machine for persistent storage:
+	mkdir -p /opt/pmm-data
+	
+	Run the PMM Server container with persistent storage and port mapping:
+	docker run -d \
+        -p 80:80 \
+        -p 443:443 \
+        -v /opt/pmm-data:/srv \
+        --name pmm-server \
+        --restart always \
+        percona/pmm-server:latest
+
+	EXPLANATION:
+	-d: Run the container in detached mode.
+	-p 80:80: Map port 80 of the container to port 80 on the host (for HTTP).
+	-p 443:443: Map port 443 of the container to port 443 on the host (for HTTPS).
+	-v /opt/pmm-data:/srv: Mount the host directory /opt/pmm-data to /srv in the container for persistent storage.
+	--name pmm-server: Assign a name to the container.
+	--restart always: Automatically restart the container if it stops.
+
+	on your ubuntu firewall, ensure to allow port 80 and port 443 and allow it on your security group if you are running it on a cloud base system like aw copy the ip and locate pmm at  port 80 and once you enter the default password which is 'user:admin, pasword:admin' it will ask you to change password. do so and continue.
+
+
+
+
+
+
+
+
+SETTING UP PMM CLIENT ON THE DATABASE SERVER/S  USING DOCKER
+
+1. To first set up the PMM client on the database servers, we install docker on the servers where MySQL is running, assuming MySQL is already installed and running.
+
+2. We then pull the pmm-client image from docker (docker pull percona/pmm-client) this should pull the latest since no version is specified but if you want a particular version you can        specify that (docker pull percona/pmm-client:<version>)
+
+
+3. Then we create a storage where the pmm-client config we will be persisted to:
+	sudo mkdir -p /usr/local/percona/pmm2/config --- create the directory.
+	sudo touch /usr/local/percona/pmm2/config/pmm-agent.yaml --- create a config file in yaml
+
+
+4.Then we either nano or vi into the config file (sudo nano /usr/local/percona/pmm2/config/pmm-agent.yaml) and register the pmm-server url either with https:// or http:// but note that for production, it is advisable to use https as it is secure and to use that we would have to configure ssl certificate for the server. But for the sake of this demo, am using http. so on that file, i will just pass (server:
+			 url: 'http://10.0.7.98') and then save and exit.
+
+5. Then give appropriate permissions:
+   Verify that the permissions and ownership on the host directory and file are correct else grant permission as follow:
+	sudo chmod 644 /usr/local/percona/pmm2/config/pmm-agent.yaml --- set file permission.
+	sudo chmod 755 /usr/local/percona/pmm2/config -- set directory permission
+	go and run the container before give the below permission so you can confirm from the container first(step 6).
+	sudo chown 1002:1002 /usr/local/percona/pmm2/config/pmm-agent.yaml --- Adjust the ownership to ensure that it matches what the Docker container expects
+	Replace 1000:1000 with the correct UID and GID for the Docker container’s user if necessary. you can verify this when you exec into container shell (sudo docker exec -it pmm-client 	bash) then use the id command, this command will output something like = uid=1000(pmmuser) gid=1000(pmmgroup) groups=1000(pmmgroup) (uid = userid, gid=groupid)
+
+
+6. Then we run a container from the image with the volume mount using the run command below:
+
+  sudo docker run -d \
+  --name pmm-client \
+  --network host \
+  --restart always \
+  --cap-add SYS_PTRACE \
+  --privileged \
+  -v /usr/local/percona/pmm2/config:/srv/pmm2/config \
+  -e PMM_AGENT_CONFIG_FILE=/srv/pmm2/config/pmm-agent.yaml \
+  -e PMM_SERVER_URL='admin:freDrick1%403ru@10.0.7.98:443' \
+  percona/pmm-client:latest
+
+
+explanation:
+sudo docker run -d:
+
+sudo runs the command with superuser privileges.
+docker run starts a new Docker container.
+-d (detached mode) runs the container in the background.
+--name pmm-client:
+
+Assigns the name pmm-client to the container. This makes it easier to manage and reference the container.
+--network host:
+
+Uses the host’s network stack for the container. This means the container will share the host’s network interfaces and IP addresses. It’s useful for network-based applications like PMM.
+--restart always:
+
+Configures the container to restart automatically if it stops or if the Docker daemon is restarted. This ensures the PMM client will always be running.
+--cap-add SYS_PTRACE:
+
+Adds the SYS_PTRACE capability to the container. This is often used for debugging or monitoring tools that need to trace processes.
+--privileged:
+
+Grants the container extended privileges, essentially giving it access to all devices and capabilities. This is usually necessary for tools that need to interact closely with the host system, like PMM.
+-v /usr/local/percona/pmm2/config:/srv/pmm2/config:
+
+Mounts the host directory /usr/local/percona/pmm2/config to the container directory /srv/pmm2/config. This allows the container to use configuration files from the host.
+-e PMM_AGENT_CONFIG_FILE=/srv/pmm2/config/pmm-agent.yaml:
+
+Sets an environment variable inside the container that specifies the path to the PMM agent configuration file.
+-e PMM_SERVER_URL='admin:freDrick1%403ru@10.0.7.98:443':
+
+Sets an environment variable PMM_SERVER_URL inside the container, specifying the URL of the PMM server including authentication credentials (username: admin, password: freDrick1%403ru, server address: 10.0.7.98, port: 443).
+percona/pmm-client:latest:
+
+Specifies the image to use for the container. In this case, it’s the latest tag of the percona/pmm-client image from Docker Hub.
+
+7. If the container is successfully running, go into the container and verify the config file permission as the permission set for the host config file and directory affects the container config file. so we run sudo docker exec -it (container _name or id)
+	whoami --- check user inside the container
+	id -g --- check the user group
+Adjust Permissions in the Container (if needed) as did for the host:
+	chmod 644 /srv/pmm2/config/pmm-agent.yaml
+	chown pmmuser:pmmgroup /srv/pmm2/config/pmm-agent.yaml --- pass the userid and groupid as shown from the result of 'id -g'
+	Then restart the container(sudo docker restart pmm-client)
+
+8. Connect the pmm-client to the pmm-server(sudo docker exec -it pmm-client pmm-admin config --server-url=http://admin:freDrick1%403ru@10.0.7.98)
+
+9. connect the MySQL instance to the pmm-client:
+	first we create a user for pmm-client:(CREATE USER 'pmm'@'%' IDENTIFIED BY 'Pmm1@3ru';),
+	grant the user privileges:
+	(GRANT SELECT ON *.* TO 'pmm'@'%';
+	GRANT SHOW DATABASES, PROCESS, REPLICATION CLIENT ON *.* TO 'pmm'@'%';)
+10. Finally connect the pmm-client to the MySQL database using the credentials as specified below:
+	sudo docker exec -it pmm-client pmm-admin add mysql --username=pmm --password=Pmm1@3ru --host=10.0.10.164 --port=3306
+
+11. Then restart the pmm-server to sync all connections and display the accurate matrix 
+
+I HOPE THIS HELPS. WRITTEN BY REUBEN
+NOTE: all passwords and IPS USED HERE ARE DUMMY.
+
+	
